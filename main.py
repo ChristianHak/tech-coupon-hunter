@@ -14,7 +14,6 @@ import warnings
 from bs4 import XMLParsedAsHTMLWarning
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
-# APSCHEDULER POUR RUN QUOTIDIEN AUTOMATIQUE
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # ================== CONFIG ==================
@@ -39,7 +38,7 @@ USER_AGENTS = [
 
 app = Flask(__name__)
 
-# ================== LISTE COMPLETE SERVICES (138+) ==================
+# ================== LISTE COMPLETE SERVICES ==================
 FALLBACK_SERVICES = [
     "Porkbun","Namecheap","Cloudflare Registrar","Dynadot","Spaceship","NameSilo","Sav.com","Internet.bs","Netim","Names.rs",
     "Cosmotown","Njalla","IONOS","Gandi","Hover","Name.com","DreamHost Registrar","Network Solutions","OVH Domains","Alibaba Cloud Domains",
@@ -62,7 +61,7 @@ FALLBACK_SERVICES = [
     "Magic Eden Credits","Blur.io Credits","Tensor.Trade","Hyperliquid Credits","dYdX Credits","GMX Credits"
 ]
 
-# ================== GOOGLE SHEETS – RAILWAY ENV VAR ==================
+# ================== GOOGLE SHEETS ==================
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
 key_json_string = os.environ['GOOGLE_SERVICE_ACCOUNT_JSON']
@@ -72,11 +71,26 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(keyfile_dict, scope)
 client = gspread.authorize(creds)
 spreadsheet = client.open(SPREADSHEET_NAME)
 
-services_ws = spreadsheet.worksheet("Services")
-known_sites_ws = spreadsheet.worksheet("KnownSites")
-deals_ws = spreadsheet.worksheet("Deals")
+def ensure_worksheet(name, headers):
+    try:
+        return spreadsheet.worksheet(name)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title=name, rows=1000, cols=10)
+        ws.append_row(headers)
+        return ws
 
-# ================== PROMO PAGES OFFICIELLES HARD-CODED (ma source n°1 pour codes valides en 30 secondes) ==================
+services_ws = ensure_worksheet("Services", ["Service"])
+known_sites_ws = ensure_worksheet("KnownSites", ["Name", "URL", "Selectors"])
+deals_ws = ensure_worksheet("Deals", ["Date", "Service", "Code", "Description", "Lien", "Vérifié le"])
+
+# ================== TEST APPEND AU BOOT (pour vérifier que la sheet marche) ==================
+try:
+    deals_ws.append_row(["TEST BOOT", "TEST", "TEST_OK", "If you see this line, sheet writing works 100%", "https://railway.app", datetime.now().strftime("%d/%m/%Y")])
+    send_telegram("✅ Test append sheet OK – writing works")
+except Exception as e:
+    send_telegram(f"ERROR sheet write at boot: {e}")
+
+# ================== OFFICIAL PROMO PAGES HARD-CODED (ma source n°1 – codes valides instantanés) ==================
 OFFICIAL_PROMO_PAGES = {
     "Porkbun": "https://porkbun.com/products/domains",
     "Namecheap": "https://www.namecheap.com/promos/",
@@ -92,6 +106,16 @@ OFFICIAL_PROMO_PAGES = {
     "RunPod": "https://www.runpod.io/pricing",
     "Together.ai": "https://together.ai/pricing",
     "Replicate": "https://replicate.com/pricing",
+    "Linode": "https://www.linode.com/pricing/",
+    "OVHcloud": "https://www.ovhcloud.com/en/promotions/",
+    "Cloudflare Registrar": "https://www.cloudflare.com/products/registrar/",
+    "Spaceship": "https://www.spaceship.com/pricing/",
+    "Dynadot": "https://www.dynadot.com/promotion",
+    "NameSilo": "https://www.namesilo.com/promotions",
+    "Sav.com": "https://sav.com/promotions",
+    "IONOS": "https://www.ionos.com/domains/domain-promotion",
+    "Gandi": "https://www.gandi.net/en/promotion",
+    "Hover": "https://www.hover.com/promotions/",
 }
 
 # ================== TELEGRAM & CACHE ==================
@@ -114,9 +138,9 @@ def save_cache(cache_dict):
 
 cache = load_cache()
 
-send_telegram("Ultimate Tech Coupon Hunter V15 – Méthode Grok 100% valide – Décembre 2025")
+send_telegram("🚀 Ultimate Tech Coupon Hunter V16 – Grok method December 2025 – Sheet will be filled")
 
-# ================== CRAWL + EXTRACTION (ma méthode exacte) ==================
+# ================== CRAWL + EXTRACTION ==================
 def crawl_page(url):
     try:
         headers = {"User-Agent": random.choice(USER_AGENTS)}
@@ -141,17 +165,15 @@ def extract_codes(content, service_name):
         soup = BeautifulSoup(content, 'html.parser')
         text = soup.get_text(separator=" ", strip=True)
     
-    # Ma regex personnelle (trouve 98 % des codes valides en 1 seconde)
-    found = re.findall(r'[A-Z0-9]{4,30}|[A-Z]{2,20}\d{1,10}|\d{1,4}(OFF|%|DISCOUNT|FREE)|WELCOME\d{1,8}|SAVE\d{1,8}|BFRIDAY\d{2,4}|CYBER\d{2,4}|NEWYEAR\d{2,4}|CHRISTMAS\d{2,4}|FLASH\d{2,4}|SUMMER\d{2,4}', text.upper())
+    found = re.findall(r'[A-Z0-9]{4,30}|[A-Z]{2,20}\d{1,10}|\d{1,4}(OFF|%|DISCOUNT|FREE)|WELCOME\d{1,8}|SAVE\d{1,8}|BFRIDAY\d{2,4}|CYBER\d{2,4}|NEWYEAR\d{2,4}|CHRISTMAS\d{2,4}|FLASH\d{2,4}|SUMMER\d{2,4}|MATRIX\w+', text.upper())
     
     for code in found:
         code = code.strip().replace(" ", "")
         if 4 <= len(code) <= 30 and re.match(r'^[A-Z0-9\-]+$', code):
             codes.add(code)
     
-    # Groq LLM filter (comme je fais pour virer les fake en 1 seconde)
     if GROQ_KEY:
-        prompt = f"Extract ONLY valid-looking promo codes for {service_name}. Return ONLY JSON array. Text: {text[:25000]}"
+        prompt = f"Extract ONLY valid-looking promo codes for {service_name} from this text. Return ONLY JSON array. Ignore expired. Text: {text[:25000]}"
         try:
             r = requests.post("https://api.groq.com/openai/v1/chat/completions",
                               headers={"Authorization": f"Bearer {GROQ_KEY}"},
@@ -168,36 +190,42 @@ def extract_codes(content, service_name):
     
     return list(codes)
 
-# ================== HUNT QUOTIDIEN – MÉTHODE GROK ==================
+# ================== HUNT QUOTIDIEN ==================
 def run_hunt():
     now = datetime.now()
     if (now - datetime.fromisoformat(cache.get("last_hunt", "2000-01-01"))).total_seconds() < 84000:
         return
 
-    send_telegram("🔥 Chasse quotidienne lancée – méthode Grok (codes valides comme quand tu me demandes)")
+    send_telegram("🔥 Chasse quotidienne lancée – méthode Grok décembre 2025")
 
     new_deals = 0
 
     for service in SERVICES:
+        send_telegram(f"--- Recherche {service} ---")
         codes_found = set()
 
-        # 1. Page promo officielle (ma source n°1 – 85 % des codes valides)
+        # 1. Page promo officielle
         for name, url in OFFICIAL_PROMO_PAGES.items():
             if service.upper() in name.upper():
                 content = crawl_page(url)
                 if content:
                     codes = extract_codes(content, service)
+                    send_telegram(f"{service} → {len(codes)} codes trouvés sur page officielle")
                     for code in codes:
                         if code not in codes_found:
                             codes_found.add(code)
-                            msg = f"VALIDÉ (officiel) → {service}\nCode: {code}\nSource: Page promo"
+                            msg = f"VALIDÉ → {service}\nCode: {code}\nSource: Page officielle"
                             send_telegram(msg)
-                            deals_ws.append_row([now.strftime("%d/%m/%Y"), service, code, "Page officielle", url, "Vérifié auto"])
-                            new_deals += 1
+                            try:
+                                deals_ws.append_row([now.strftime("%d/%m/%Y"), service, code, "Page officielle", url, "Vérifié auto"])
+                                new_deals += 1
+                            except Exception as e:
+                                send_telegram(f"ERROR append sheet: {e}")
 
-        # 2. Recherche Reddit/LowEndTalk (ma source n°2 pour codes cachés)
-        query = f'"{service}" ("working" OR "valid" OR "current") ("coupon" OR "promo code" OR "discount") ("december 2025" OR "2025" OR "2026") site:reddit.com OR site:lowendtalk.com OR site:namepros.com OR site:twitter.com'
+        # 2. Recherche Reddit etc.
+        query = f'"{service}" ("working" OR "valid" OR "current") ("coupon" OR "promo code") ("december 2025" OR "2025" OR "2026") site:reddit.com OR site:lowendtalk.com OR site:namepros.com OR site:twitter.com'
         urls = search_with_apis(query)
+        send_telegram(f"{service} → {len(urls)} URLs Reddit/Twitter trouvées")
         for url in urls[:5]:
             content = crawl_page(url)
             if content:
@@ -207,8 +235,11 @@ def run_hunt():
                         codes_found.add(code)
                         msg = f"VALIDÉ (Reddit) → {service}\nCode: {code}\nLien: {url}"
                         send_telegram(msg)
-                        deals_ws.append_row([now.strftime("%d/%m/%Y"), service, code, "Reddit/LowEndTalk", url, "Vérifié auto"])
-                        new_deals += 1
+                        try:
+                            deals_ws.append_row([now.strftime("%d/%m/%Y"), service, code, "Reddit/Twitter", url, "Vérifié auto"])
+                            new_deals += 1
+                        except Exception as e:
+                            send_telegram(f"ERROR append sheet: {e}")
 
     cache["last_hunt"] = now.isoformat()
     save_cache(cache)
@@ -219,11 +250,12 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(func=run_hunt, trigger="interval", hours=24, next_run_time=datetime.now() + timedelta(minutes=2))
 scheduler.start()
 
-threading.Thread(target=run_hunt).start()  # Run immédiat au boot
+# Run immédiat au boot
+threading.Thread(target=run_hunt).start()
 
 @app.route("/")
 def home():
-    return "Tech Coupon Hunter V15 – Grok method – Décembre 2025", 200
+    return "Tech Coupon Hunter V16 – Railway – Décembre 2025", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
