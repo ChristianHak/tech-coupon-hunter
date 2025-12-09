@@ -218,7 +218,14 @@ def send_telegram(message: str):
 
 
 send_telegram("🚀 Ultimate Tech Coupon Hunter – Railway – Décembre 2025 – boot OK")
-
+def post_to_public_channel(deal_text):
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            data={"chat_id": "@techdeals2025", "text": deal_text}
+        )
+    except:
+        pass
 ###############################################################################
 # Fonctions utilitaires : crawl + extraction regex
 ###############################################################################
@@ -434,6 +441,8 @@ def run_hunt():
     for svc in selected_services:
         try:
             deals = crawl_official_and_forums(svc)
+            for d in deals:
+                post_to_public_channel(f"🔥 {d['service']}\nCode: {d['code']}\nQuality: {d['quality']}\nSource: {d['source']}")
             all_deals.extend(deals)
             send_telegram(
                 f"📡 {svc['name']}: {len(deals)} deals candidats trouvés (run partiel)."
